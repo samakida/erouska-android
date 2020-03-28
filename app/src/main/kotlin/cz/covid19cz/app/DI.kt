@@ -1,5 +1,6 @@
 package cz.covid19cz.app
 
+import android.app.AlarmManager
 import android.app.Application
 import android.bluetooth.BluetoothManager
 import android.os.PowerManager
@@ -82,6 +83,7 @@ val appModule = module {
     single { WakeLockManager(androidContext().getSystemService()) }
     single { androidContext().getSystemService<PowerManager>() }
     single { androidContext().getSystemService<BluetoothManager>() }
+    single { androidContext().getSystemService<AlarmManager>() }
 }
 
 

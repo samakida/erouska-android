@@ -1,6 +1,7 @@
 package cz.covid19cz.app.service
 
 import android.app.ActivityManager
+import android.app.AlarmManager
 import android.app.Service
 import android.bluetooth.BluetoothAdapter
 import android.content.Context
@@ -8,7 +9,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.location.LocationManager
 import android.os.*
-import androidx.core.content.ContextCompat
+import androidx.core.app.AlarmManagerCompat
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import cz.covid19cz.app.AppConfig
 import cz.covid19cz.app.bt.BluetoothRepository
@@ -21,6 +22,7 @@ import cz.covid19cz.app.receiver.LocationStateReceiver
 import cz.covid19cz.app.receiver.ScreenStateReceiver
 import cz.covid19cz.app.ui.notifications.CovidNotificationManager
 import cz.covid19cz.app.utils.L
+import cz.covid19cz.app.utils.wrapAsForegroundService
 import io.reactivex.Observable
 import io.reactivex.disposables.Disposable
 import org.koin.android.ext.android.inject
@@ -100,13 +102,15 @@ class CovidService : Service() {
     private val wakeLockManager by inject<WakeLockManager>()
     private val powerManager by inject<PowerManager>()
     private val localBroadcastManager by inject<LocalBroadcastManager>()
+    private val alarmManager by inject<AlarmManager>()
     private val notificationManager = CovidNotificationManager(this)
 
     private var bleAdvertisingDisposable: Disposable? = null
     private var bleScanningDisposable: Disposable? = null
 
     private lateinit var deviceBuid: String
-    private var servicePaused = false
+    private var scanningPaused = false
+    private var serviceRunning = false
 
     override fun onCreate() {
         super.onCreate()
@@ -118,21 +122,25 @@ class CovidService : Service() {
         when (intent?.action) {
             // null intent is in case service is restarted by system
             ACTION_START, null -> {
-                servicePaused = false
-                prefs.setAppPaused(false)
-                createNotification()
-                turnMaskOn()
-                wakeLockManager.acquire()
+                if (!serviceRunning) {
+                    serviceRunning = true
+                    scanningPaused = false
+                    prefs.setAppPaused(false)
+                    createNotification()
+                    turnMaskOn()
+                    wakeLockManager.acquire()
+                }
             }
             ACTION_STOP -> {
                 wakeLockManager.release()
-                servicePaused = true
+                scanningPaused = true
                 prefs.setAppPaused(true)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     stopForeground(STOP_FOREGROUND_DETACH)
                 } else {
                     stopForeground(true)
                 }
+                serviceRunning = false
                 stopSelf()
                 createNotification()
             }
@@ -145,13 +153,13 @@ class CovidService : Service() {
                 }
             }
             ACTION_PAUSE -> {
-                servicePaused = true
+                scanningPaused = true
                 prefs.setAppPaused(true)
                 createNotification()
                 turnMaskOff()
             }
             ACTION_RESUME -> {
-                servicePaused = false
+                scanningPaused = false
                 prefs.setAppPaused(false)
                 createNotification()
                 turnMaskOn()
@@ -181,6 +189,12 @@ class CovidService : Service() {
     }
 
     private fun turnMaskOn() {
+        alarmManager.setAndAllowWhileIdle(
+            AlarmManager.ELAPSED_REALTIME_WAKEUP,
+            SystemClock.elapsedRealtime() + (1000 * 60),
+            Companion.startService(this).wrapAsForegroundService(this))
+
+
         if (isLocationEnabled() && btUtils.isBtEnabled()) {
             localBroadcastManager.sendBroadcast(Intent(ACTION_MASK_STARTED))
             startBleAdvertising()
@@ -204,7 +218,7 @@ class CovidService : Service() {
     private fun createNotification() {
         notificationManager.postNotification(
             CovidNotificationManager.ServiceStatus(
-                servicePaused,
+                scanningPaused,
                 btUtils.isBtEnabled(),
                 isLocationEnabled(),
                 batterySaverRestrictsLocation()
